@@ -23,7 +23,10 @@ import {
   Eye,
   EyeOff,
   UserPlus,
-  BookOpen
+  BookOpen,
+  Download,
+  FileSpreadsheet,
+  FileText
 } from 'lucide-react';
 import { Student, Teacher, Grade, Campus, GradeFeeStructure, CommunityPost, FeeItem, PaymentReceipt } from '../types';
 import { 
@@ -123,6 +126,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   // Fee Structures Editor
   const [editingFees, setEditingFees] = useState<Record<Grade, GradeFeeStructure>>({ ...feeStructures });
 
+  // Export Modal state
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportScope, setExportScope] = useState<'filtered' | 'all'>('filtered');
+
   // Handle Admin Login
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,6 +180,219 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     const matchCampus = campusFilter === 'All' || st.campus === campusFilter;
     return matchQuery && matchGrade && matchCampus;
   });
+
+  // Export to CSV helper for external reporting
+  const handleExportCSV = (scope: 'filtered' | 'all' = 'filtered') => {
+    const listToExport = scope === 'all' ? students : filteredStudents;
+    if (listToExport.length === 0) {
+      showToast('No student records found to export. Enroll students or clear search filters first.');
+      return;
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const headers = [
+      'Student Reg No',
+      'Learner Full Name',
+      'Grade',
+      'Campus',
+      'Status',
+      'Age',
+      'Parent / Guardian Name',
+      'Parent WhatsApp Phone',
+      'Parent Portal Password',
+      'Total Term Fee (KES)',
+      'Amount Paid (KES)',
+      'Balance Due (KES)',
+      'Fee Clearance Status',
+      'Fee Due Date',
+      'Payment M-Pesa Code(s)',
+      'Latest Payment Date',
+      'Teacher CBC Remarks'
+    ];
+
+    const escapeCSV = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = listToExport.map((st) => {
+      const paymentStatus =
+        st.fees.balanceDue === 0
+          ? 'Fully Paid'
+          : st.fees.paidAmount > 0
+          ? 'Partial Balance'
+          : 'Unpaid / Pending';
+      const mpesaCodes = st.fees.paymentHistory.map((p) => p.mpesaRef).filter(Boolean).join('; ');
+      const lastPayment = st.fees.paymentHistory[0];
+      const lastPaymentDate = lastPayment ? lastPayment.date : 'None';
+
+      return [
+        st.studentRegNo,
+        st.name,
+        st.grade,
+        st.campus,
+        st.status,
+        st.age,
+        st.parentName,
+        st.parentWhatsApp,
+        st.parentPassword || '',
+        st.fees.totalTermFee,
+        st.fees.paidAmount,
+        st.fees.balanceDue,
+        paymentStatus,
+        st.fees.dueDate,
+        mpesaCodes || 'None',
+        lastPaymentDate,
+        st.teacherRemarks || ''
+      ].map(escapeCSV).join(',');
+    });
+
+    // UTF-8 BOM (\uFEFF) ensures Excel and external tools recognize UTF-8 encoding immediately
+    const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ambotsavo_students_fees_${scope}_${dateStr}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${listToExport.length} student records to CSV!`);
+  };
+
+  // Export to Excel helper (.xls spreadsheet with rich formatting for accounting/reporting)
+  const handleExportExcel = (scope: 'filtered' | 'all' = 'filtered') => {
+    const listToExport = scope === 'all' ? students : filteredStudents;
+    if (listToExport.length === 0) {
+      showToast('No student records found to export. Enroll students or clear search filters first.');
+      return;
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const timestamp = new Date().toLocaleString('en-KE', { dateStyle: 'full', timeStyle: 'short' });
+    const totalInvoiced = listToExport.reduce((sum, s) => sum + s.fees.totalTermFee, 0);
+    const totalCollected = listToExport.reduce((sum, s) => sum + s.fees.paidAmount, 0);
+    const totalOutstanding = listToExport.reduce((sum, s) => sum + s.fees.balanceDue, 0);
+
+    const tableHtml = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+        <!--[if gte mso 9]>
+        <xml>
+          <x:ExcelWorkbook>
+            <x:ExcelWorksheets>
+              <x:ExcelWorksheet>
+                <x:Name>Student Fees Report</x:Name>
+                <x:WorksheetOptions>
+                  <x:DisplayGridlines/>
+                </x:WorksheetOptions>
+              </x:ExcelWorksheet>
+            </x:ExcelWorksheets>
+          </x:ExcelWorkbook>
+        </xml>
+        <![endif]-->
+        <style>
+          body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; }
+          .title { font-size: 16pt; font-weight: bold; color: #064e3b; }
+          .subtitle { font-size: 10pt; color: #475569; margin-bottom: 12px; }
+          .stat-box { font-weight: bold; padding: 6px; font-size: 10pt; }
+          table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+          th { background-color: #064e3b; color: #ffffff; font-weight: bold; border: 1px solid #047857; padding: 8px 10px; text-align: left; }
+          td { border: 1px solid #cbd5e1; padding: 6px 10px; }
+          .currency { text-align: right; mso-number-format: "\\#\\,\\#\\#0"; font-family: Consolas, monospace; }
+          .cleared { background-color: #ecfdf5; color: #047857; font-weight: bold; }
+          .pending { background-color: #fef2f2; color: #b91c1c; font-weight: bold; }
+          .total-row { background-color: #f8fafc; font-weight: bold; border-top: 2px solid #064e3b; }
+        </style>
+      </head>
+      <body>
+        <div class="title">AMBOTSAVO SCHOOLS (KAJIADO & KIMANA) - STUDENTS & FEES REPORT</div>
+        <div class="subtitle">Generated on: ${timestamp} | Scope: ${scope.toUpperCase()} (${listToExport.length} Students)</div>
+        <br/>
+        <table>
+          <tr style="background-color: #f1f5f9;">
+            <td colspan="4" class="stat-box">Total Learners: <strong>${listToExport.length}</strong></td>
+            <td colspan="4" class="stat-box">Total Invoiced: <strong>KES ${totalInvoiced.toLocaleString()}</strong></td>
+            <td colspan="4" class="stat-box" style="color: #047857;">Total Paid: <strong>KES ${totalCollected.toLocaleString()}</strong></td>
+            <td colspan="4" class="stat-box" style="color: #b91c1c;">Total Balance: <strong>KES ${totalOutstanding.toLocaleString()}</strong></td>
+          </tr>
+        </table>
+        <br/>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Student Reg No</th>
+              <th>Learner Full Name</th>
+              <th>Grade</th>
+              <th>Campus</th>
+              <th>Status</th>
+              <th>Age</th>
+              <th>Parent / Guardian</th>
+              <th>Parent WhatsApp</th>
+              <th>Parent Password</th>
+              <th>Total Fee (KES)</th>
+              <th>Paid (KES)</th>
+              <th>Balance Due (KES)</th>
+              <th>Fee Status</th>
+              <th>Due Date</th>
+              <th>M-Pesa References</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${listToExport
+              .map((st, idx) => {
+                const isCleared = st.fees.balanceDue === 0;
+                const mpesaCodes = st.fees.paymentHistory.map((p) => p.mpesaRef).filter(Boolean).join('; ');
+                return `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td style="font-family: Consolas, monospace;">${st.studentRegNo}</td>
+                    <td><strong>${st.name}</strong></td>
+                    <td>${st.grade}</td>
+                    <td>${st.campus}</td>
+                    <td>${st.status}</td>
+                    <td>${st.age}</td>
+                    <td>${st.parentName}</td>
+                    <td style="font-family: Consolas, monospace;">${st.parentWhatsApp}</td>
+                    <td style="font-family: Consolas, monospace; color: #b45309;">${st.parentPassword || ''}</td>
+                    <td class="currency">${st.fees.totalTermFee}</td>
+                    <td class="currency" style="color: #047857;">${st.fees.paidAmount}</td>
+                    <td class="currency" style="color: #b91c1c;">${st.fees.balanceDue}</td>
+                    <td class="${isCleared ? 'cleared' : 'pending'}">${isCleared ? 'Fully Paid' : 'Pending'}</td>
+                    <td>${st.fees.dueDate}</td>
+                    <td style="font-family: Consolas, monospace;">${mpesaCodes || '-'}</td>
+                  </tr>
+                `;
+              })
+              .join('')}
+            <tr class="total-row">
+              <td colspan="10" style="text-align: right; font-weight: bold;">TOTALS (KES):</td>
+              <td class="currency" style="font-weight: bold;">${totalInvoiced}</td>
+              <td class="currency" style="font-weight: bold; color: #047857;">${totalCollected}</td>
+              <td class="currency" style="font-weight: bold; color: #b91c1c;">${totalOutstanding}</td>
+              <td colspan="3"></td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob([tableHtml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ambotsavo_students_fees_${scope}_${dateStr}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${listToExport.length} student records to Excel (.xls)!`);
+  };
 
   // Financial statistics
   const totalBilled = students.reduce((sum, s) => sum + s.fees.totalTermFee, 0);
@@ -424,7 +644,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="px-3 py-1.5 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 text-xs font-semibold rounded-xl border border-emerald-600 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+              title="Export students and fee status report to CSV or Excel"
+            >
+              <Download className="w-3.5 h-3.5 text-amber-300" />
+              <span>Export Report</span>
+            </button>
             {onBackToSchool && (
               <button
                 onClick={onBackToSchool}
@@ -566,7 +794,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => handleExportCSV('filtered')}
+                  className="px-3.5 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold text-xs rounded-xl border border-slate-600 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Export currently filtered students list to CSV"
+                >
+                  <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Export CSV</span>
+                </button>
+                <button
+                  onClick={() => handleExportExcel('filtered')}
+                  className="px-3.5 py-2.5 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 font-semibold text-xs rounded-xl border border-emerald-600 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Export currently filtered students list to Excel (.xls)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>Export Excel</span>
+                </button>
                 <button
                   onClick={() => setShowAddStudentModal(true)}
                   className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -873,12 +1117,33 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             {/* Students Fee Master Table */}
             <div className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden shadow-sm">
               <div className="p-5 border-b border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <h3 className="font-bold text-white text-sm font-serif">
-                  Learner Fee Ledger &amp; Balance Balances
-                </h3>
-                <span className="text-xs text-slate-400">
-                  Click &ldquo;Edit Fees&rdquo; on any student to add custom charges, waive balances, or clear receipts.
-                </span>
+                <div>
+                  <h3 className="font-bold text-white text-sm font-serif">
+                    Learner Fee Ledger &amp; Balance Balances
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    Click &ldquo;Edit Fees&rdquo; on any student to add custom charges, waive balances, or clear receipts.
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => handleExportCSV('filtered')}
+                    className="px-3.5 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold text-xs rounded-xl border border-slate-600 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    title="Export currently filtered fee ledger to CSV"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Export CSV</span>
+                  </button>
+                  <button
+                    onClick={() => handleExportExcel('filtered')}
+                    className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl border border-emerald-600 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    title="Export currently filtered fee ledger to Excel (.xls)"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                    <span>Export Excel (.xls)</span>
+                  </button>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -957,13 +1222,31 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 </p>
               </div>
 
-              <button
-                onClick={() => setShowAddStudentModal(true)}
-                className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>+ Enroll New Learner</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => handleExportCSV('filtered')}
+                  className="px-3.5 py-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold text-xs rounded-xl border border-slate-600 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Export student directory to CSV"
+                >
+                  <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Export CSV</span>
+                </button>
+                <button
+                  onClick={() => handleExportExcel('filtered')}
+                  className="px-3.5 py-2.5 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 font-semibold text-xs rounded-xl border border-emerald-600 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Export student directory to Excel (.xls)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>Export Excel</span>
+                </button>
+                <button
+                  onClick={() => setShowAddStudentModal(true)}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>+ Enroll New Learner</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1660,6 +1943,147 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: EXPORT DATA TO CSV / EXCEL ================= */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-7 border border-slate-700 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base font-serif">
+                    Export Students &amp; Fee Status Report
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Generate CSV or Excel files for school accounting, board meetings, and auditing.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="text-slate-400 hover:text-white text-lg font-bold p-1 cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Scope Selection */}
+            <div className="space-y-2 text-xs">
+              <label className="block text-slate-300 font-bold uppercase tracking-wider text-[11px]">
+                Choose Export Scope
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setExportScope('filtered')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    exportScope === 'filtered'
+                      ? 'bg-amber-500/15 border-amber-500 text-white font-bold'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  <div className="text-amber-300 font-bold">Filtered View</div>
+                  <div className="text-[11px] text-slate-400 font-normal mt-0.5">
+                    {filteredStudents.length} Students matching current filters
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setExportScope('all')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    exportScope === 'all'
+                      ? 'bg-amber-500/15 border-amber-500 text-white font-bold'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  <div className="text-amber-300 font-bold">All Students</div>
+                  <div className="text-[11px] text-slate-400 font-normal mt-0.5">
+                    {students.length} Total Registered Learners
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Scope Summary Preview */}
+            {(() => {
+              const exportList = exportScope === 'all' ? students : filteredStudents;
+              const expBilled = exportList.reduce((sum, s) => sum + s.fees.totalTermFee, 0);
+              const expPaid = exportList.reduce((sum, s) => sum + s.fees.paidAmount, 0);
+              const expBal = exportList.reduce((sum, s) => sum + s.fees.balanceDue, 0);
+
+              return (
+                <div className="bg-slate-900/90 rounded-2xl p-4 border border-slate-700/80 space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-2">
+                    <span>Records Selected:</span>
+                    <strong className="text-white font-mono text-sm">{exportList.length} Students</strong>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Total Invoiced</span>
+                      <span className="font-mono font-bold text-slate-200">KES {expBilled.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-emerald-400 block">Total Paid</span>
+                      <span className="font-mono font-bold text-emerald-400">KES {expPaid.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-rose-400 block">Total Balance</span>
+                      <span className="font-mono font-bold text-rose-400">KES {expBal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Format explanation */}
+            <div className="space-y-2 text-xs text-slate-400">
+              <div className="flex items-start gap-2">
+                <FileText className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>CSV (.csv):</strong> Universal format for import into Google Sheets, accounting systems, database queries, and Microsoft Excel.
+                </span>
+              </div>
+              <div className="flex items-start gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Excel (.xls):</strong> Formatted spreadsheet with column headers, currency styling, color badges, and financial totals summary.
+                </span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col sm:flex-row items-center gap-3 pt-3 border-t border-slate-700">
+              <button
+                type="button"
+                onClick={() => {
+                  handleExportCSV(exportScope);
+                  setShowExportModal(false);
+                }}
+                className="w-full sm:flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <FileText className="w-4 h-4 text-amber-300" />
+                <span>Download CSV File</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  handleExportExcel(exportScope);
+                  setShowExportModal(false);
+                }}
+                className="w-full sm:flex-1 py-3 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+                <span>Download Excel (.xls)</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
