@@ -1,0 +1,8 @@
+{
+  "name": "Remix Ambotsavo Schools Portal",
+  "description": "Ambotsavo Schools located in Kajiado and Kimana - Comprehensive school website with interactive Parent Portal, Teacher Hub, CBC progress records, fees tracker, homework uploads, and emoji-enabled Community Page.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
